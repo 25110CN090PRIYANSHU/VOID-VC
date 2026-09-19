@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#070812">
+<title>VOID VC — Video Meetings</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="toast"></div>
+
+<section id="auth" class="screen auth-screen">
+  <div class="ambient a1"></div><div class="ambient a2"></div>
+  <nav class="nav"><div class="logo">VOID<span>VC</span></div><div class="nav-note">Private video meetings</div></nav>
+  <div class="auth-wrap">
+    <div class="hero">
+      <div class="eyebrow">VOID VC / 03</div>
+      <h1>Talk face to face.<br><em>Without the noise.</em></h1>
+      <p class="hero-copy">A clean, fast meeting space for calls, collaboration and real conversations — right in your browser.</p>
+      <div class="feature-row">
+        <span>● HD VIDEO</span><span>● SCREEN SHARE</span><span>● LIVE CHAT</span>
+      </div>
+    </div>
+    <div class="auth-card glass">
+      <div class="card-top"><span class="mini-dot"></span><span>WELCOME TO VOID VC</span></div>
+      <div class="tabs"><button class="tab active" data-tab="login">Sign in</button><button class="tab" data-tab="signup">Create account</button></div>
+      <form id="authForm">
+        <div id="signupFields" class="hidden"><label>Name<input id="authName" maxlength="40" placeholder="Your name"></label></div>
+        <label>Email<input id="authEmail" type="email" placeholder="you@example.com" autocomplete="email" required></label>
+        <label>Password<input id="authPassword" type="password" minlength="6" placeholder="At least 6 characters" autocomplete="current-password" required></label>
+        <button class="primary" id="authBtn">Continue <span>→</span></button>
+      </form>
+      <div class="or"><span></span>OR<span></span></div>
+      <button id="guestBtn" class="secondary">Continue as guest</button>
+      <div class="secure">⌁ Camera and microphone stay under your control.</div>
+    </div>
+  </div>
+</section>
+
+<section id="dashboard" class="screen hidden dashboard-screen">
+  <nav class="nav dash-nav">
+    <div class="logo">VOID<span>VC</span></div>
+    <div class="nav-right"><div class="user-chip"><span id="userAvatar">G</span><span id="welcome"></span></div><button id="logout" class="ghost">Log out</button></div>
+  </nav>
+  <div class="dash">
+    <div class="dash-head">
+      <div><div class="eyebrow">YOUR SPACE</div><h2>Ready when you are.</h2><p>Create a room, send the link and start talking.</p></div>
+      <div class="dash-clock" id="dashClock"></div>
+    </div>
+    <div class="dash-cards">
+      <div class="dash-card featured">
+        <div class="card-glow"></div><div class="icon-square">✦</div>
+        <div class="card-label">QUICK START</div><h3>New meeting</h3><p>Start a private room in seconds. No complicated setup.</p>
+        <button id="newMeeting" class="primary">Start a meeting <span>→</span></button>
+      </div>
+      <div class="dash-card">
+        <div class="icon-square muted-icon">↗</div><div class="card-label">JOIN A ROOM</div><h3>Have an invite?</h3><p>Paste a room ID and jump straight in.</p>
+        <div class="join"><input id="dashRoom" placeholder="ROOM ID" maxlength="40"><button id="dashJoin">Join</button></div>
+      </div>
+    </div>
+    <div class="history"><div class="section-title"><span>Recent meetings</span><small>Last 30</small></div><div id="historyList" class="history-list"><div class="empty">Your meeting history will appear here.</div></div></div>
+  </div>
+</section>
+
+<section id="meeting" class="hidden meeting">
+  <header class="meeting-top">
+    <div class="meeting-brand"><div class="logo">VOID<span>VC</span></div><div class="meeting-meta"><span id="roomTitle">Meeting</span> <i>·</i> <b id="roomCode"></b> <i>·</i> <span id="callTime">00:00</span></div></div>
+    <div class="meeting-actions">
+      <button id="copyInvite" class="action-btn"><span>⌁</span> Invite</button>
+      <button id="lockBtn" class="action-btn">🔓</button>
+      <button id="settingsBtn" class="action-btn">⚙</button>
+    </div>
+  </header>
+  <div class="meeting-body">
+    <main class="stage">
+      <div id="connectionBanner" class="connection-banner hidden">Reconnecting…</div>
+      <div id="videoGrid" class="video-grid"></div>
+      <div class="bottom-bar">
+        <div class="call-status"><span class="live-dot"></span><span id="callStatus">Ready</span></div>
+        <div class="bottom-controls">
+          <button id="mic" class="ctrl on" title="Mute microphone">🎙<small>Mute</small></button>
+          <button id="camera" class="ctrl on" title="Turn camera off">📹<small>Camera</small></button>
+          <button id="screen" class="ctrl" title="Share your screen">▣<small>Share</small></button>
+          <button id="hand" class="ctrl" title="Raise hand">✋<small>Raise</small></button>
+          <button id="fullscreen" class="ctrl" title="Fullscreen">⛶<small>Full</small></button>
+          <button id="leave" class="ctrl end" title="Leave meeting">☎<small>Leave</small></button>
+        </div>
+        <div class="participant-counter">👥 <span id="peopleCount">0</span></div>
+      </div>
+    </main>
+    <aside class="side">
+      <div class="side-head"><div class="side-tabs"><button class="side-tab active" data-panel="people">People <span id="peopleBadge">0</span></button><button class="side-tab" data-panel="chat">Chat <span id="chatBadge" class="badge hidden">!</span></button></div></div>
+      <div id="peoplePanel" class="side-panel"><div id="peopleList"></div></div>
+      <div id="chatPanel" class="side-panel hidden"><div id="chatMessages"></div><form id="chatForm"><input id="chatInput" placeholder="Message everyone…" maxlength="1000"><button>→</button></form></div>
+    </aside>
+  </div>
+  <div id="settingsModal" class="modal hidden"><div class="modal-box glass"><button class="close" id="closeSettings">×</button><div class="eyebrow">DEVICE SETTINGS</div><h3>Choose your devices</h3><label>Microphone<select id="micSelect"></select></label><label>Camera<select id="camSelect"></select></label><label>Speaker<select id="speakerSelect"></select></label><button id="saveSettings" class="primary">Apply changes</button></div></div>
+</section>
+<script src="/socket.io/socket.io.js"></script><script src="app.js"></script>
+</body></html>
