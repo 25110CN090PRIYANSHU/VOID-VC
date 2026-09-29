@@ -8,6 +8,8 @@ let tab = "login",
   screenStream = null,
   peers = new Map(),
   pendingCandidates = new Map(),
+  peerInitiators = new Map(),
+  restartAttempts = new Map(),
   participants = new Map(),
   hostId = "",
   mySocketId = "";
@@ -16,7 +18,13 @@ let muted = false,
   hand = false,
   locked = false,
   callStart = 0,
-  timer = null;
+  timer = null,
+  rtcConfig = {
+    iceServers: [
+      { urls: "stun:stun.l.google.com:19302" },
+      { urls: "stun:stun1.l.google.com:19302" },
+    ],
+  };
 
 function toast(t) {
   $("toast").textContent = t;
@@ -155,11 +163,47 @@ $("dashRoom").onkeydown = (e) => {
   if (e.key === "Enter") $("dashJoin").click();
 };
 
+async function loadRtcConfig() {
+  try {
+    const r = await fetch("/api/rtc-config", { cache: "no-store" });
+    if (!r.ok) throw new Error("RTC config unavailable");
+    const d = await r.json();
+    if (Array.isArray(d.iceServers) && d.iceServers.length) {
+      rtcConfig = { iceServers: d.iceServers };
+    }
+    return d;
+  } catch (e) {
+    console.warn("Using fallback STUN configuration", e);
+    return { turnConfigured: false, iceServers: rtcConfig.iceServers };
+  }
+}
+
+async function restartPeer(id) {
+  const pc = peers.get(id);
+  if (!pc || !peerInitiators.get(id) || restartAttempts.get(id)) return;
+  restartAttempts.set(id, true);
+  try {
+    pc.restartIce?.();
+    const offer = await pc.createOffer({ iceRestart: true });
+    await pc.setLocalDescription(offer);
+    socket.emit("signal", {
+      to: id,
+      data: { type: "offer", sdp: pc.localDescription, iceRestart: true },
+    });
+  } catch (e) {
+    console.warn("ICE restart failed", e);
+  } finally {
+    setTimeout(() => restartAttempts.delete(id), 5000);
+  }
+}
+
 async function join(id, title, password, isHost) {
   roomId = id;
   peers.forEach((p) => p.close());
   peers.clear();
   pendingCandidates.clear();
+  peerInitiators.clear();
+  restartAttempts.clear();
   show("meeting");
   $("roomCode").textContent = id;
   $("roomTitle").textContent = title || "VOID VC Meeting";
@@ -184,6 +228,7 @@ async function join(id, title, password, isHost) {
       ":" +
       String(s % 60).padStart(2, "0");
   }, 1000);
+  await loadRtcConfig();
   $("callStatus").textContent = "Waiting for people";
   socket.emit("join-room", {
     roomId: id,
@@ -204,11 +249,10 @@ function addLocalTile() {
 }
 function createPeer(id, offer) {
   if (peers.has(id)) return peers.get(id);
+  peerInitiators.set(id, !!offer);
   const pc = new RTCPeerConnection({
-    iceServers: [
-      { urls: "stun:stun.l.google.com:19302" },
-      { urls: "stun:stun1.l.google.com:19302" },
-    ],
+    ...rtcConfig,
+    iceCandidatePoolSize: 4,
   });
 
   localStream?.getTracks().forEach((t) => pc.addTrack(t, localStream));
@@ -226,6 +270,26 @@ function createPeer(id, offer) {
   pc.ontrack = (e) => {
     const stream = e.streams?.[0];
     if (stream) attachRemote(id, stream);
+  };
+
+  pc.onicecandidateerror = (e) => {
+    console.warn("ICE server error", e.url, e.errorCode, e.errorText);
+  };
+
+  pc.oniceconnectionstatechange = () => {
+    const state = pc.iceConnectionState;
+    if (state === "connected" || state === "completed") {
+      restartAttempts.delete(id);
+      $("callStatus").textContent = "Connected";
+      $("connectionBanner").classList.add("hidden");
+    } else if (["checking", "disconnected"].includes(state)) {
+      $("connectionBanner").classList.remove("hidden");
+      $("callStatus").textContent = "Connecting…";
+    } else if (state === "failed") {
+      $("connectionBanner").classList.remove("hidden");
+      $("callStatus").textContent = "Trying another route…";
+      restartPeer(id);
+    }
   };
 
   pc.onconnectionstatechange = () => {
@@ -363,6 +427,8 @@ socket.on("participant-left", (p) => {
   peers.get(p.id)?.close();
   peers.delete(p.id);
   pendingCandidates.delete(p.id);
+  peerInitiators.delete(p.id);
+  restartAttempts.delete(p.id);
   document.querySelector(`[data-peer="${p.id}"]`)?.remove();
   toast(`${p.name} left`);
   $("callStatus").textContent = "Waiting for people";
@@ -480,6 +546,8 @@ function leave(notify = true) {
   peers.forEach((p) => p.close());
   peers.clear();
   pendingCandidates.clear();
+  peerInitiators.clear();
+  restartAttempts.clear();
   localStream?.getTracks().forEach((t) => t.stop());
   screenStream?.getTracks().forEach((t) => t.stop());
   localStream = null;

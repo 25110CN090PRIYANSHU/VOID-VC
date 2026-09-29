@@ -14,6 +14,30 @@ const io=new Server(server,{cors:{origin:"*"}});
 const PORT=process.env.PORT||5000;
 const JWT_SECRET=process.env.JWT_SECRET||"void-vc-dev-secret";
 
+// WebRTC ICE configuration. STUN helps discover the public network path;
+// TURN relays media when a direct peer-to-peer path is blocked by NAT/firewalls.
+const DEFAULT_STUN_SERVERS = [
+  "stun:stun.l.google.com:19302",
+  "stun:stun1.l.google.com:19302",
+];
+
+function getIceServers(){
+  const servers = DEFAULT_STUN_SERVERS.map(url => ({ urls: url }));
+  const turnUrls = String(process.env.TURN_URLS || "")
+    .split(/[;,\n]/)
+    .map(v => v.trim())
+    .filter(Boolean);
+  const username = String(process.env.TURN_USERNAME || "").trim();
+  const credential = String(process.env.TURN_CREDENTIAL || "").trim();
+
+  // TURN credentials are intentionally supplied by environment variables so
+  // they are never hard-coded into the project/ZIP.
+  if(turnUrls.length && username && credential){
+    servers.push({ urls: turnUrls, username, credential });
+  }
+  return servers;
+}
+
 app.use(cors());
 app.use(express.json({limit:"1mb"}));
 app.use(express.static(path.join(__dirname,"public")));
@@ -47,7 +71,17 @@ const memoryMeetings=[];
 function tokenFor(u){return jwt.sign({id:u._id||u.id,email:u.email,name:u.name},JWT_SECRET,{expiresIn:"7d"})}
 function safeUser(u){return {id:u._id||u.id,name:u.name,email:u.email,avatar:u.avatar||""}}
 
-app.get("/api/health",(req,res)=>res.json({ok:true,db:dbReady,service:"VOID VC"}));
+app.get("/api/health",(req,res)=>res.json({ok:true,db:dbReady,service:"VOID VC",turnConfigured:!!(process.env.TURN_URLS&&process.env.TURN_USERNAME&&process.env.TURN_CREDENTIAL)}));
+
+// The browser needs ICE server information to build RTCPeerConnection.
+// Credentials come from the server environment and are never stored in app.js.
+app.get("/api/rtc-config",(req,res)=>{
+  res.set("Cache-Control","no-store");
+  res.json({
+    iceServers:getIceServers(),
+    turnConfigured:!!(process.env.TURN_URLS&&process.env.TURN_USERNAME&&process.env.TURN_CREDENTIAL)
+  });
+});
 
 app.post("/api/auth/signup",async(req,res)=>{
   const {name,email,password}=req.body||{};
