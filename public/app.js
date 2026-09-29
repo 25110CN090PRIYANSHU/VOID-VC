@@ -7,6 +7,7 @@ let tab = "login",
   localStream = null,
   screenStream = null,
   peers = new Map(),
+  pendingCandidates = new Map(),
   participants = new Map(),
   hostId = "",
   mySocketId = "";
@@ -156,6 +157,9 @@ $("dashRoom").onkeydown = (e) => {
 
 async function join(id, title, password, isHost) {
   roomId = id;
+  peers.forEach((p) => p.close());
+  peers.clear();
+  pendingCandidates.clear();
   show("meeting");
   $("roomCode").textContent = id;
   $("roomTitle").textContent = title || "VOID VC Meeting";
@@ -206,15 +210,24 @@ function createPeer(id, offer) {
       { urls: "stun:stun1.l.google.com:19302" },
     ],
   });
-  localStream.getTracks().forEach((t) => pc.addTrack(t, localStream));
+
+  localStream?.getTracks().forEach((t) => pc.addTrack(t, localStream));
+  pendingCandidates.set(id, []);
+
   pc.onicecandidate = (e) => {
-    if (e.candidate)
+    if (e.candidate) {
       socket.emit("signal", {
         to: id,
         data: { type: "candidate", candidate: e.candidate },
       });
+    }
   };
-  pc.ontrack = (e) => attachRemote(id, e.streams[0]);
+
+  pc.ontrack = (e) => {
+    const stream = e.streams?.[0];
+    if (stream) attachRemote(id, stream);
+  };
+
   pc.onconnectionstatechange = () => {
     if (pc.connectionState === "connected") {
       $("callStatus").textContent = "Connected";
@@ -224,25 +237,47 @@ function createPeer(id, offer) {
       $("callStatus").textContent = "Reconnecting…";
     }
   };
+
   peers.set(id, pc);
-  if (offer)
+
+  if (offer) {
     pc.createOffer()
       .then((o) => pc.setLocalDescription(o))
-      .then(() =>
+      .then(() => {
         socket.emit("signal", {
           to: id,
           data: { type: "offer", sdp: pc.localDescription },
-        }),
-      );
+        });
+      })
+      .catch((e) => console.warn("Offer failed", e));
+  }
   return pc;
 }
+
+async function flushCandidates(id, pc) {
+  const queued = pendingCandidates.get(id) || [];
+  pendingCandidates.set(id, []);
+  for (const candidate of queued) {
+    try {
+      await pc.addIceCandidate(candidate);
+    } catch (e) {
+      console.warn("Queued ICE candidate failed", e);
+    }
+  }
+}
+
 function attachRemote(id, stream) {
   let t = document.querySelector(`[data-peer="${id}"]`);
   if (!t) {
     t = makeTile(id);
     $("videoGrid").appendChild(t);
   }
-  t.querySelector("video").srcObject = stream;
+  const video = t.querySelector("video");
+  video.srcObject = stream;
+  video.onloadedmetadata = () => video.play().catch(() => {});
+  requestAnimationFrame(() => {
+    video.play().catch(() => {});
+  });
 }
 function makeTile(id) {
   let p = participants.get(id);
@@ -302,23 +337,32 @@ socket.on("signal", async ({ from, data }) => {
   try {
     if (data.type === "offer") {
       await pc.setRemoteDescription(data.sdp);
+      await flushCandidates(from, pc);
       let a = await pc.createAnswer();
       await pc.setLocalDescription(a);
       socket.emit("signal", {
         to: from,
         data: { type: "answer", sdp: pc.localDescription },
       });
-    } else if (data.type === "answer") await pc.setRemoteDescription(data.sdp);
-    else if (data.type === "candidate")
-      await pc.addIceCandidate(data.candidate);
+    } else if (data.type === "answer") {
+      await pc.setRemoteDescription(data.sdp);
+      await flushCandidates(from, pc);
+    } else if (data.type === "candidate") {
+      if (pc.remoteDescription) {
+        await pc.addIceCandidate(data.candidate);
+      } else {
+        pendingCandidates.get(from)?.push(data.candidate);
+      }
+    }
   } catch (e) {
-    console.warn(e);
+    console.warn("WebRTC signaling error", e);
   }
 });
 socket.on("participants", renderPeople);
 socket.on("participant-left", (p) => {
   peers.get(p.id)?.close();
   peers.delete(p.id);
+  pendingCandidates.delete(p.id);
   document.querySelector(`[data-peer="${p.id}"]`)?.remove();
   toast(`${p.name} left`);
   $("callStatus").textContent = "Waiting for people";
@@ -435,16 +479,27 @@ function leave(notify = true) {
   clearInterval(timer);
   peers.forEach((p) => p.close());
   peers.clear();
+  pendingCandidates.clear();
   localStream?.getTracks().forEach((t) => t.stop());
   screenStream?.getTracks().forEach((t) => t.stop());
   localStream = null;
   screenStream = null;
   $("videoGrid").innerHTML = "";
+  $("meeting").classList.remove("mobile-panel-open");
   participants.clear();
   show("dashboard");
   loadHistory();
 }
-$("fullscreen").onclick = () => document.documentElement.requestFullscreen?.();
+$("fullscreen").onclick = async () => {
+  try {
+    if (document.fullscreenElement) await document.exitFullscreen();
+    else await $("meeting").requestFullscreen();
+  } catch {}
+};
+
+$("mobilePanelBtn").onclick = () => {
+  $("meeting").classList.toggle("mobile-panel-open");
+};
 document.querySelectorAll(".side-tab").forEach(
   (b) =>
     (b.onclick = () => {
@@ -454,6 +509,7 @@ document.querySelectorAll(".side-tab").forEach(
       $("peoplePanel").classList.toggle("hidden", b.dataset.panel !== "people");
       $("chatPanel").classList.toggle("hidden", b.dataset.panel !== "chat");
       if (b.dataset.panel === "chat") $("chatBadge").classList.add("hidden");
+      if (window.innerWidth <= 900) $("meeting").classList.add("mobile-panel-open");
     }),
 );
 $("settingsBtn").onclick = async () => {
