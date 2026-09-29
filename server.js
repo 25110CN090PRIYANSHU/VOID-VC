@@ -14,28 +14,80 @@ const io=new Server(server,{cors:{origin:"*"}});
 const PORT=process.env.PORT||5000;
 const JWT_SECRET=process.env.JWT_SECRET||"void-vc-dev-secret";
 
-// WebRTC ICE configuration. STUN helps discover the public network path;
-// TURN relays media when a direct peer-to-peer path is blocked by NAT/firewalls.
+// WebRTC ICE configuration.
+// STUN discovers a direct network path. TURN relays media when NAT/firewalls
+// prevent a direct path. TURN credentials stay server-side in environment vars.
 const DEFAULT_STUN_SERVERS = [
   "stun:stun.l.google.com:19302",
   "stun:stun1.l.google.com:19302",
 ];
 
-function getIceServers(){
-  const servers = DEFAULT_STUN_SERVERS.map(url => ({ urls: url }));
-  const turnUrls = String(process.env.TURN_URLS || "")
-    .split(/[;,\n]/)
-    .map(v => v.trim())
-    .filter(Boolean);
+let meteredIceCache = { expiresAt: 0, servers: null };
+
+function parseTurnUrls(value){
+  const raw = String(value || "").trim();
+  if(!raw) return [];
+
+  // Also accept a JSON array copied from a TURN provider's dashboard.
+  try{
+    const parsed = JSON.parse(raw);
+    if(Array.isArray(parsed)) return parsed.flatMap(v => {
+      if(typeof v === "string") return [v];
+      if(v && typeof v.urls === "string") return [v.urls];
+      if(v && Array.isArray(v.urls)) return v.urls;
+      return [];
+    }).map(v => String(v).trim()).filter(Boolean);
+  }catch{}
+
+  return raw.split(/[;,\n]/).map(v => v.trim()).filter(Boolean);
+}
+
+function envTurnServers(){
+  const urls = parseTurnUrls(process.env.TURN_URLS);
   const username = String(process.env.TURN_USERNAME || "").trim();
   const credential = String(process.env.TURN_CREDENTIAL || "").trim();
+  if(!urls.length || !username || !credential) return [];
 
-  // TURN credentials are intentionally supplied by environment variables so
-  // they are never hard-coded into the project/ZIP.
-  if(turnUrls.length && username && credential){
-    servers.push({ urls: turnUrls, username, credential });
+  // Ignore accidental STUN entries in TURN_URLS. STUN is already supplied above.
+  const turnOnly = urls.filter(url => /^(turn|turns):/i.test(url));
+  if(!turnOnly.length) return [];
+  return [{ urls: turnOnly, username, credential }];
+}
+
+async function meteredIceServers(){
+  const apiKey = String(process.env.METERED_API_KEY || "").trim();
+  if(!apiKey) return null;
+  if(meteredIceCache.servers && Date.now() < meteredIceCache.expiresAt) return meteredIceCache.servers;
+
+  const appName = String(process.env.METERED_APP_NAME || "").trim();
+  if(!appName) return null;
+
+  try{
+    const region = String(process.env.METERED_REGION || "standard").trim();
+    const url = `https://${appName}.metered.live/api/v1/turn/credentials?apiKey=${encodeURIComponent(apiKey)}&region=${encodeURIComponent(region)}`;
+    const response = await fetch(url, { headers:{accept:"application/json"} });
+    if(!response.ok) throw new Error(`Metered HTTP ${response.status}`);
+    const data = await response.json();
+    if(!Array.isArray(data) || !data.length) throw new Error("Metered returned no ICE servers");
+    const servers = data.filter(x => x && x.urls);
+    if(!servers.length) throw new Error("Metered returned an invalid ICE server list");
+    meteredIceCache = { servers, expiresAt: Date.now() + 5 * 60 * 1000 };
+    return servers;
+  }catch(e){
+    console.warn("Metered TURN config unavailable:", e.message);
+    return null;
   }
-  return servers;
+}
+
+async function getIceServers(){
+  const servers = DEFAULT_STUN_SERVERS.map(url => ({ urls: url }));
+  const metered = await meteredIceServers();
+  if(metered) return servers.concat(metered);
+  return servers.concat(envTurnServers());
+}
+
+function hasTurnEnv(){
+  return envTurnServers().length > 0 || !!(process.env.METERED_API_KEY && process.env.METERED_APP_NAME);
 }
 
 app.use(cors());
@@ -71,15 +123,15 @@ const memoryMeetings=[];
 function tokenFor(u){return jwt.sign({id:u._id||u.id,email:u.email,name:u.name},JWT_SECRET,{expiresIn:"7d"})}
 function safeUser(u){return {id:u._id||u.id,name:u.name,email:u.email,avatar:u.avatar||""}}
 
-app.get("/api/health",(req,res)=>res.json({ok:true,db:dbReady,service:"VOID VC",turnConfigured:!!(process.env.TURN_URLS&&process.env.TURN_USERNAME&&process.env.TURN_CREDENTIAL)}));
+app.get("/api/health",(req,res)=>res.json({ok:true,db:dbReady,service:"VOID VC",turnConfigured:hasTurnEnv()}));
 
 // The browser needs ICE server information to build RTCPeerConnection.
 // Credentials come from the server environment and are never stored in app.js.
-app.get("/api/rtc-config",(req,res)=>{
+app.get("/api/rtc-config",async(req,res)=>{
   res.set("Cache-Control","no-store");
   res.json({
-    iceServers:getIceServers(),
-    turnConfigured:!!(process.env.TURN_URLS&&process.env.TURN_USERNAME&&process.env.TURN_CREDENTIAL)
+    iceServers:await getIceServers(),
+    turnConfigured:hasTurnEnv()
   });
 });
 
